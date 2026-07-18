@@ -64,7 +64,28 @@ export default function ExportPanel({ udid }: Props) {
   }
 
   async function exportMessages() {
-    const convResult = await sidecarCall<{ conversations: { chat_id: number; display_name: string; message_count: number }[] }>('list_conversations', { udid });
+    type Conv = {
+      chat_id: number;
+      chat_identifier: string;
+      display_name: string;
+      service: string;
+      is_group: boolean;
+      message_count: number;
+    };
+    type Msg = {
+      message_id: number;
+      date: string;
+      sender: string;
+      sender_handle: string;
+      text: string | null;
+      message_type: string;
+      is_from_me: boolean;
+      is_reaction: boolean;
+      has_attachments: boolean;
+      link_preview?: { url?: string };
+      attachments?: { transfer_name?: string; filename?: string; mime_type?: string; total_bytes?: number }[];
+    };
+    const convResult = await sidecarCall<{ conversations: Conv[] }>('list_conversations', { udid });
     const conversations = convResult.conversations || [];
     if (conversations.length === 0) {
       setStatus('No messages found in this backup');
@@ -79,19 +100,44 @@ export default function ExportPanel({ udid }: Props) {
     setStatus('Fetching messages...');
     document.body.style.cursor = 'wait';
     try {
-      const csvRows: string[] = ['"Date","Conversation","Sender","Message"'];
+      // Keep in sync with python/messages.py CSV_COLUMNS
+      const header = [
+        'Chat Identifier', 'Conversation', 'Conversation Type', 'Service',
+        'Date', 'Direction', 'Sender', 'Sender Handle',
+        'Message ID', 'Message Type', 'Is From Me', 'Is Reaction',
+        'Text', 'Link URL', 'Has Attachments', 'Attachments',
+      ].map(csvEscape).join(',');
+      const csvRows: string[] = [header];
       for (const conv of conversations) {
         let offset = 0;
         const limit = 500;
         while (true) {
-          const msgResult = await sidecarCall<{ messages: { date: string; sender: string; text: string }[]; total: number }>('get_messages', { udid, chat_id: conv.chat_id, offset, limit });
+          const msgResult = await sidecarCall<{ messages: Msg[]; total: number }>('get_messages', { udid, chat_id: conv.chat_id, offset, limit });
           const msgs = msgResult.messages || [];
           for (const m of msgs) {
-            const date = csvEscape(m.date || '');
-            const convo = csvEscape(conv.display_name || '');
-            const sender = csvEscape(m.sender || '');
-            const text = csvEscape(m.text || '');
-            csvRows.push(`${date},${convo},${sender},${text}`);
+            const attachments = (m.attachments || []).map(a => ({
+              filename: a.transfer_name || a.filename || '',
+              mime_type: a.mime_type || '',
+              total_bytes: a.total_bytes ?? null,
+            }));
+            csvRows.push([
+              csvEscape(conv.chat_identifier || ''),
+              csvEscape(conv.display_name || ''),
+              csvEscape(conv.is_group ? 'group' : 'individual'),
+              csvEscape(conv.service || ''),
+              csvEscape(m.date || ''),
+              csvEscape(m.is_from_me ? 'Sent' : 'Received'),
+              csvEscape(m.sender || ''),
+              csvEscape(m.sender_handle || ''),
+              csvEscape(m.message_id != null ? String(m.message_id) : ''),
+              csvEscape(m.message_type || ''),
+              csvEscape(m.is_from_me ? 'True' : 'False'),
+              csvEscape(m.is_reaction ? 'True' : 'False'),
+              csvEscape(m.text || ''),
+              csvEscape(m.link_preview?.url || ''),
+              csvEscape(m.has_attachments ? 'True' : 'False'),
+              csvEscape(attachments.length ? JSON.stringify(attachments) : ''),
+            ].join(','));
           }
           offset += limit;
           if (offset >= msgResult.total || msgs.length === 0) break;
