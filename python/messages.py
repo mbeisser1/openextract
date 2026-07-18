@@ -36,6 +36,7 @@ from ios_backup_core.timestamps import (
 __all__ = [
     "MessageExtractor",
     "CSV_COLUMNS",
+    "ATTACHMENT_CSV_COLUMNS",
     "apple_date_to_iso",
     "iso_to_apple_date",
     "parse_attributed_body",
@@ -60,6 +61,19 @@ CSV_COLUMNS = [
     "Text",
     "Link URL",
     "Has Attachments",
+]
+
+# Companion attachments CSV (one row per attachment; join on Message ID).
+ATTACHMENT_CSV_COLUMNS = [
+    "Message ID",
+    "Chat Identifier",
+    "Conversation",
+    "Date",
+    "Direction",
+    "Sender",
+    "Filename",
+    "Mime Type",
+    "Attachment ID",
 ]
 
 
@@ -310,6 +324,42 @@ class MessageExtractor:
             self._csv_link_url(msg),
             bool(msg.get("has_attachments")),
         ]
+
+    def _attachment_display_name(self, attachment: dict) -> str:
+        name = attachment.get("transfer_name") or ""
+        if name:
+            return name
+        path = attachment.get("filename") or ""
+        return os.path.basename(path) if path else ""
+
+    def _attachment_csv_rows(self, messages: list) -> list:
+        """Build attachment CSV data rows (one per attachment)."""
+        rows = []
+        for msg in messages:
+            message_id = msg.get("message_id")
+            for att in msg.get("attachments") or []:
+                att_id = att.get("attachment_id")
+                rows.append([
+                    "" if message_id is None else message_id,
+                    msg.get("_chat_identifier") or "",
+                    msg.get("_conversation") or "",
+                    msg.get("date") or "",
+                    self._csv_direction(msg),
+                    msg.get("sender") or "",
+                    self._attachment_display_name(att),
+                    att.get("mime_type") or "",
+                    "" if att_id is None else att_id,
+                ])
+        return rows
+
+    def _export_attachments_csv(self, messages: list, filepath: str) -> int:
+        """Write companion attachments CSV; always includes header. Returns row count."""
+        rows = self._attachment_csv_rows(messages)
+        with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(ATTACHMENT_CSV_COLUMNS)
+            writer.writerows(rows)
+        return len(rows)
 
     def _export_txt(self, messages, chat_id, output_dir):
         filename = f"conversation_{chat_id}.txt"
