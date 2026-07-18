@@ -36,11 +36,32 @@ from ios_backup_core.timestamps import (
 
 __all__ = [
     "MessageExtractor",
+    "CSV_COLUMNS",
     "apple_date_to_iso",
     "iso_to_apple_date",
     "parse_attributed_body",
     "APPLE_EPOCH",
     "NANOSECOND_THRESHOLD",
+]
+
+# Shared header for single-chat and merged conversation CSV exports.
+CSV_COLUMNS = [
+    "Chat Identifier",
+    "Conversation",
+    "Conversation Type",
+    "Service",
+    "Date",
+    "Direction",
+    "Sender",
+    "Sender Handle",
+    "Message ID",
+    "Message Type",
+    "Is From Me",
+    "Is Reaction",
+    "Text",
+    "Link URL",
+    "Has Attachments",
+    "Attachments",
 ]
 
 
@@ -284,6 +305,28 @@ class MessageExtractor:
             msg["_conversation"] = info["conversation"]
             msg["_service"] = info["service"]
             msg["_conversation_type"] = info["conversation_type"]
+
+    def _csv_row(self, msg) -> list:
+        """Build one CSV data row from a message dict (plus stamped chat meta)."""
+        message_id = msg.get("message_id")
+        return [
+            msg.get("_chat_identifier") or "",
+            msg.get("_conversation") or "",
+            msg.get("_conversation_type") or "",
+            msg.get("_service") or "",
+            msg.get("date") or "",
+            self._csv_direction(msg),
+            msg.get("sender") or "",
+            msg.get("sender_handle") or "",
+            "" if message_id is None else message_id,
+            msg.get("message_type") or "",
+            bool(msg.get("is_from_me")),
+            bool(msg.get("is_reaction")),
+            msg.get("text") or "",
+            self._csv_link_url(msg),
+            bool(msg.get("has_attachments")),
+            self._csv_attachments(msg),
+        ]
 
     def _export_txt(self, messages, chat_id, output_dir):
         filename = f"conversation_{chat_id}.txt"
