@@ -251,6 +251,36 @@ class MessageExtractor:
             return preview.get("url") or ""
         return ""
 
+    def _chat_meta_map(self, backup, contacts: dict) -> dict:
+        """Map chat_id → export metadata from list_conversations."""
+        result = self.list_conversations(backup, contacts)
+        meta = {}
+        for c in result.get("conversations") or []:
+            chat_id = c.get("chat_id")
+            if chat_id is None:
+                continue
+            meta[chat_id] = {
+                "chat_identifier": c.get("chat_identifier") or "",
+                "conversation": c.get("display_name") or "",
+                "service": c.get("service") or "",
+                "conversation_type": "group" if c.get("is_group") else "individual",
+            }
+        return meta
+
+    def _stamp_chat_meta(self, messages: list, chat_id: int, meta: dict) -> None:
+        """Attach chat-level fields onto each message for CSV export."""
+        info = meta.get(chat_id) or {
+            "chat_identifier": "",
+            "conversation": f"Chat {chat_id}",
+            "service": "",
+            "conversation_type": "individual",
+        }
+        for msg in messages:
+            msg["_chat_identifier"] = info["chat_identifier"]
+            msg["_conversation"] = info["conversation"]
+            msg["_service"] = info["service"]
+            msg["_conversation_type"] = info["conversation_type"]
+
     def _export_txt(self, messages, chat_id, output_dir):
         filename = f"conversation_{chat_id}.txt"
         filepath = os.path.join(output_dir, filename)
