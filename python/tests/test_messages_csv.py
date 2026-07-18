@@ -149,6 +149,69 @@ class TestCsvExport(unittest.TestCase):
                 att_rows = list(csv.reader(f))
             self.assertEqual(att_rows[0], ATTACHMENT_CSV_COLUMNS)
 
+    def test_export_csv_copies_attachment_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src.bin")
+            with open(src, "wb") as f:
+                f.write(b"hello-bytes")
+
+            self.ext._resolve_attachment_path = MagicMock(return_value={
+                "path": src,
+                "filename": "clip.mp4",
+                "mime_type": "video/mp4",
+            })
+
+            messages = [
+                _sample_msg(
+                    message_id=43,
+                    has_attachments=True,
+                    attachments=[{
+                        "attachment_id": 9,
+                        "transfer_name": "clip.mp4",
+                        "mime_type": "video/mp4",
+                    }],
+                ),
+            ]
+            out = os.path.join(tmp, "out")
+            os.makedirs(out)
+            result = self.ext._export_csv(messages, chat_id=1654, output_dir=out, backup=object())
+
+            self.assertEqual(result["attachments_exported"], 1)
+            self.assertEqual(result["attachments_failed"], 0)
+            dest = os.path.join(out, "attachments", "43_9_clip.mp4")
+            self.assertTrue(os.path.exists(dest))
+            with open(dest, "rb") as f:
+                self.assertEqual(f.read(), b"hello-bytes")
+
+            with open(result["attachments_file"], newline="", encoding="utf-8-sig") as f:
+                att_rows = list(csv.reader(f))
+            path_col = ATTACHMENT_CSV_COLUMNS.index("Exported Path")
+            self.assertEqual(att_rows[1][path_col], "attachments/43_9_clip.mp4")
+
+    def test_export_csv_missing_attachment_leaves_path_empty(self):
+        self.ext._resolve_attachment_path = MagicMock(
+            return_value={"error": "Attachment file not found in backup"}
+        )
+        messages = [
+            _sample_msg(
+                message_id=43,
+                has_attachments=True,
+                attachments=[{
+                    "attachment_id": 9,
+                    "transfer_name": "missing.mp4",
+                    "mime_type": "video/mp4",
+                }],
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.ext._export_csv(messages, chat_id=1, output_dir=tmp, backup=object())
+            self.assertEqual(result["attachments_exported"], 0)
+            self.assertEqual(result["attachments_failed"], 1)
+            with open(result["attachments_file"], newline="", encoding="utf-8-sig") as f:
+                att_rows = list(csv.reader(f))
+            path_col = ATTACHMENT_CSV_COLUMNS.index("Exported Path")
+            self.assertEqual(att_rows[1][path_col], "")
+
 
 if __name__ == "__main__":
     unittest.main()
