@@ -83,7 +83,12 @@ export default function ExportPanel({ udid }: Props) {
       is_reaction: boolean;
       has_attachments: boolean;
       link_preview?: { url?: string };
-      attachments?: { transfer_name?: string; filename?: string; mime_type?: string; total_bytes?: number }[];
+      attachments?: {
+        attachment_id?: number;
+        transfer_name?: string;
+        filename?: string;
+        mime_type?: string;
+      }[];
     };
     const convResult = await sidecarCall<{ conversations: Conv[] }>('list_conversations', { udid });
     const conversations = convResult.conversations || [];
@@ -100,14 +105,19 @@ export default function ExportPanel({ udid }: Props) {
     setStatus('Fetching messages...');
     document.body.style.cursor = 'wait';
     try {
-      // Keep in sync with python/messages.py CSV_COLUMNS
+      // Keep in sync with python/messages.py CSV_COLUMNS / ATTACHMENT_CSV_COLUMNS
       const header = [
         'Chat Identifier', 'Conversation', 'Conversation Type', 'Service',
         'Date', 'Direction', 'Sender', 'Sender Handle',
         'Message ID', 'Message Type', 'Is From Phone Owner', 'Is Reaction',
-        'Text', 'Link URL', 'Has Attachments', 'Attachments',
+        'Text', 'Link URL', 'Has Attachments',
+      ].map(csvEscape).join(',');
+      const attHeader = [
+        'Message ID', 'Chat Identifier', 'Conversation', 'Date', 'Direction',
+        'Sender', 'Filename', 'Mime Type', 'Attachment ID',
       ].map(csvEscape).join(',');
       const csvRows: string[] = [header];
+      const attRows: string[] = [attHeader];
       for (const conv of conversations) {
         let offset = 0;
         const limit = 500;
@@ -115,18 +125,14 @@ export default function ExportPanel({ udid }: Props) {
           const msgResult = await sidecarCall<{ messages: Msg[]; total: number }>('get_messages', { udid, chat_id: conv.chat_id, offset, limit });
           const msgs = msgResult.messages || [];
           for (const m of msgs) {
-            const attachments = (m.attachments || []).map(a => ({
-              filename: a.transfer_name || a.filename || '',
-              mime_type: a.mime_type || '',
-              total_bytes: a.total_bytes ?? null,
-            }));
+            const direction = m.is_from_me ? 'Sent' : 'Received';
             csvRows.push([
               csvEscape(conv.chat_identifier || ''),
               csvEscape(conv.display_name || ''),
               csvEscape(conv.is_group ? 'group' : 'individual'),
               csvEscape(conv.service || ''),
               csvEscape(m.date || ''),
-              csvEscape(m.is_from_me ? 'Sent' : 'Received'),
+              csvEscape(direction),
               csvEscape(m.sender || ''),
               csvEscape(m.sender_handle || ''),
               csvEscape(m.message_id != null ? String(m.message_id) : ''),
@@ -136,14 +142,33 @@ export default function ExportPanel({ udid }: Props) {
               csvEscape(m.text || ''),
               csvEscape(m.link_preview?.url || ''),
               csvEscape(m.has_attachments ? 'True' : 'False'),
-              csvEscape(attachments.length ? JSON.stringify(attachments) : ''),
             ].join(','));
+            for (const a of m.attachments || []) {
+              const filename = a.transfer_name
+                || (a.filename ? a.filename.split(/[/\\]/).pop() : '')
+                || '';
+              attRows.push([
+                csvEscape(m.message_id != null ? String(m.message_id) : ''),
+                csvEscape(conv.chat_identifier || ''),
+                csvEscape(conv.display_name || ''),
+                csvEscape(m.date || ''),
+                csvEscape(direction),
+                csvEscape(m.sender || ''),
+                csvEscape(filename),
+                csvEscape(a.mime_type || ''),
+                csvEscape(a.attachment_id != null ? String(a.attachment_id) : ''),
+              ].join(','));
+            }
           }
           offset += limit;
           if (offset >= msgResult.total || msgs.length === 0) break;
         }
       }
       await window.openextract.writeFile(filePath, csvRows.join('\n'));
+      const attPath = filePath.toLowerCase().endsWith('.csv')
+        ? `${filePath.slice(0, -4)}_attachments.csv`
+        : `${filePath}_attachments.csv`;
+      await window.openextract.writeFile(attPath, attRows.join('\n'));
     } finally {
       document.body.style.cursor = '';
     }
