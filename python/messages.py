@@ -74,6 +74,7 @@ ATTACHMENT_CSV_COLUMNS = [
     "Filename",
     "Mime Type",
     "Attachment ID",
+    "Exported Path",
 ]
 
 
@@ -332,13 +333,20 @@ class MessageExtractor:
         path = attachment.get("filename") or ""
         return os.path.basename(path) if path else ""
 
-    def _attachment_csv_rows(self, messages: list) -> list:
-        """Build attachment CSV data rows (one per attachment)."""
+    def _attachment_csv_rows(self, messages: list, path_map: Optional[dict] = None) -> list:
+        """Build attachment CSV data rows (one per attachment).
+
+        path_map maps attachment_id → relative exported path (e.g. attachments/…).
+        """
+        path_map = path_map or {}
         rows = []
         for msg in messages:
             message_id = msg.get("message_id")
             for att in msg.get("attachments") or []:
                 att_id = att.get("attachment_id")
+                exported = ""
+                if att_id is not None:
+                    exported = path_map.get(att_id) or path_map.get(str(att_id)) or ""
                 rows.append([
                     "" if message_id is None else message_id,
                     msg.get("_chat_identifier") or "",
@@ -349,12 +357,15 @@ class MessageExtractor:
                     self._attachment_display_name(att),
                     att.get("mime_type") or "",
                     "" if att_id is None else att_id,
+                    exported,
                 ])
         return rows
 
-    def _export_attachments_csv(self, messages: list, filepath: str) -> int:
+    def _export_attachments_csv(
+        self, messages: list, filepath: str, path_map: Optional[dict] = None
+    ) -> int:
         """Write companion attachments CSV; always includes header. Returns row count."""
-        rows = self._attachment_csv_rows(messages)
+        rows = self._attachment_csv_rows(messages, path_map=path_map)
         with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
             writer.writerow(ATTACHMENT_CSV_COLUMNS)
