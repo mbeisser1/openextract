@@ -39,19 +39,8 @@ jobs:
       - name: TypeScript check (electron)
         run: npx tsc --noEmit -p tsconfig.electron.json
 
-      # python/requirements.txt installs ios-backup-core via `-e ../../ios-backup-core`.
-      # The expected layout is openextract/ and ios-backup-core/ as siblings on disk,
-      # so clone ios-backup-core one level above $GITHUB_WORKSPACE before pip runs.
-      # TODO: remove this step once ios-backup-core ships to PyPI and requirements.txt
-      # pins a versioned release instead of the editable path install.
-      - name: Clone ios-backup-core (sibling for editable install)
-        run: |
-          git clone --depth=1 \
-            https://github.com/charleswest775/ios-backup-core.git \
-            "$GITHUB_WORKSPACE/../ios-backup-core"
-
-      # Run from python/ so pip resolves `-e ../../ios-backup-core` the same
-      # way it does locally (README tells devs to `cd python` first).
+      # ios-backup-core is installed from GitHub via requirements.txt.
+      # TODO: pin a PyPI release once ios-backup-core is published.
       - name: Install Python dependencies
         working-directory: python
         run: pip install ruff pytest -r requirements.txt
