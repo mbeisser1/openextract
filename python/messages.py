@@ -21,6 +21,7 @@ sidecar imports from this module:
 
 import base64
 import csv
+import json
 import os
 from typing import Optional
 
@@ -226,6 +227,29 @@ class MessageExtractor:
             text = (msg.get("text") or "").strip()
             return f"{text} {label}".strip() if text else label
         return msg.get("text") or ""
+
+    def _csv_attachments(self, msg) -> str:
+        """Serialize attachment metadata for a CSV cell (JSON array)."""
+        attachments = msg.get("attachments") or []
+        if not attachments:
+            return ""
+        slim = []
+        for a in attachments:
+            slim.append({
+                "filename": a.get("transfer_name") or a.get("filename") or "",
+                "mime_type": a.get("mime_type") or "",
+                "total_bytes": a.get("total_bytes"),
+            })
+        return json.dumps(slim, ensure_ascii=False, separators=(",", ":"))
+
+    def _csv_direction(self, msg) -> str:
+        return "Sent" if msg.get("is_from_me") else "Received"
+
+    def _csv_link_url(self, msg) -> str:
+        preview = msg.get("link_preview")
+        if isinstance(preview, dict):
+            return preview.get("url") or ""
+        return ""
 
     def _export_txt(self, messages, chat_id, output_dir):
         filename = f"conversation_{chat_id}.txt"
