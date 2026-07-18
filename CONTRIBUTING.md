@@ -24,6 +24,14 @@ cd python && pip install -r requirements.txt && cd ..
 npm run dev
 ```
 
+`pip install -r requirements.txt` installs `ios-backup-core` from GitHub. No sibling checkout is required.
+
+If you are developing `ios-backup-core` locally alongside OpenExtract, override with an editable install:
+
+```bash
+pip install -e ../ios-backup-core
+```
+
 ## Commit Convention
 
 We use [Conventional Commits](https://www.conventionalcommits.org/):
