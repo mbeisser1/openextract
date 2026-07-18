@@ -478,14 +478,9 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
         filepath = os.path.join(output_dir, "all_conversations.csv")
         with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["Date", "Conversation", "Direction", "Sender", "Text", "Is From Me", "Has Attachments"])
+            writer.writerow(CSV_COLUMNS)
             for msg in messages:
-                direction = "Sent" if msg["is_from_me"] else "Received"
-                writer.writerow([
-                    msg["date"], msg["_conversation"], direction,
-                    msg["sender"], self._message_text(msg),
-                    msg["is_from_me"], msg["has_attachments"]
-                ])
+                writer.writerow(self._csv_row(msg))
         return {"files": [filepath], "message_count": len(messages)}
 
     def _export_merged_html(self, messages, output_dir):
