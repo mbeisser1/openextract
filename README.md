@@ -33,16 +33,16 @@ cd openextract
 # Install Node dependencies
 npm install
 
-# Install Python dependencies
-cd python
-pip install -r requirements.txt
-cd ..
+# Create a venv and install Python dependencies (pulls ios-backup-core from GitHub)
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+cd python && pip install -r requirements.txt && cd ..
 
 # Start the development server
 npm run dev
 ```
 
-This will launch Vite (React dev server) and Electron together. The app will auto-detect iPhone backups in the default locations:
+Electron uses `.venv` automatically in development. This will launch Vite (React dev server) and Electron together. The app will auto-detect iPhone backups in the default locations:
 
 - **macOS:** `~/Library/Application Support/MobileSync/Backup/`
 - **Windows:** `%APPDATA%\Apple Computer\MobileSync\Backup\`
