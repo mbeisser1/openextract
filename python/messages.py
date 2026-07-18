@@ -102,6 +102,8 @@ class MessageExtractor:
 
         Returns ``{path, filename, mime_type}`` or ``{error: ...}``.
         """
+        # Re-use the inner extractor's connection helper so we share the
+        # same PRAGMAs / index creation it sets up on first use.
         db_path = self._inner._get_sms_db(backup)
         if not db_path:
             return {"error": "sms.db not found"}
@@ -133,6 +135,8 @@ class MessageExtractor:
 
             mime_type = row["mime_type"]
             filename_lower = (row["filename"] or "").lower()
+            
+            # Infer mime_type from extension if still missing (older backups)
             if not mime_type:
                 _ext_map = {
                     ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -409,53 +413,9 @@ class MessageExtractor:
             "attachments_failed": failed_files,
         }
 
-    def _html_attachment_markup(self, msg, path_map: dict) -> str:
-        """Build HTML for a message's exported attachments (images + file links)."""
-        parts = []
-        for att in msg.get("attachments") or []:
-            att_id = att.get("attachment_id")
-            rel = path_map.get(att_id) if att_id is not None else None
-            if not rel:
-                continue
-            name = self._attachment_display_name(att) or os.path.basename(rel)
-            mime = (att.get("mime_type") or "").lower()
-            safe_src = html.escape(rel, quote=True)
-            safe_name = html.escape(name)
-            if mime.startswith("image/"):
-                parts.append(
-                    f'<div class="att"><img src="{safe_src}" alt="{safe_name}"></div>'
-                )
-            else:
-                parts.append(
-                    f'<div class="att"><a href="{safe_src}">{safe_name}</a></div>'
-                )
-        return "".join(parts)
-
-    def _html_message_body(self, msg, path_map: dict) -> str:
-        text = (msg.get("text") or "").strip()
-        att_html = self._html_attachment_markup(msg, path_map)
-        if text:
-            body = html.escape(text).replace("\n", "<br>\n")
-            if att_html:
-                return body + att_html
-            return body
-        if att_html:
-            return att_html
-        return "[Attachment]"
-
-    def _export_html(self, messages, chat_id, output_dir, backup=None):
+    def _export_html(self, messages, chat_id, output_dir):
         filename = f"conversation_{chat_id}.html"
         filepath = os.path.join(output_dir, filename)
-
-        attachments_dir = os.path.join(output_dir, "attachments")
-        path_map: dict = {}
-        exported_files = 0
-        failed_files = 0
-        if backup is not None:
-            path_map, exported_files, failed_files = self._export_attachment_files(
-                backup, messages, attachments_dir
-            )
-
         with open(filepath, "w", encoding="utf-8") as f:
             f.write("""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Conversation Export</title>
@@ -466,27 +426,18 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
 .received { background: #E9E9EB; color: black; float: left; border-bottom-left-radius: 4px; }
 .meta { font-size: 11px; color: #888; clear: both; text-align: center; margin: 12px 0 4px; }
 .sender { font-size: 11px; color: #666; margin-bottom: 2px; }
-.att { margin-top: 8px; }
-.att img { max-width: 100%; border-radius: 8px; display: block; }
-.att a { color: inherit; text-decoration: underline; word-break: break-all; }
 </style></head><body>
 """)
             for msg in messages:
                 css_class = "sent" if msg["is_from_me"] else "received"
-                body = self._html_message_body(msg, path_map)
-                date = html.escape(msg["date"] or "")
+                text = msg["text"] or "[Attachment]"
+                date = msg["date"] or ""
                 f.write(f'<div class="meta">{date}</div>\n')
                 if not msg["is_from_me"]:
-                    f.write(f'<div class="sender">{html.escape(msg["sender"])}</div>\n')
-                f.write(f'<div class="msg {css_class}">{body}</div>\n')
+                    f.write(f'<div class="sender">{msg["sender"]}</div>\n')
+                f.write(f'<div class="msg {css_class}">{text}</div>\n')
             f.write("</body></html>")
-        return {
-            "file": filepath,
-            "attachments_dir": attachments_dir,
-            "message_count": len(messages),
-            "attachments_exported": exported_files,
-            "attachments_failed": failed_files,
-        }
+        return {"file": filepath, "message_count": len(messages)}
 
     # ── Multi-conversation export ────────────────────────────────────────────
 
@@ -580,7 +531,7 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
         elif fmt == "csv":
             return self._export_merged_csv(all_messages, output_dir, backup=backup)
         elif fmt == "html":
-            return self._export_merged_html(all_messages, output_dir, backup=backup)
+            return self._export_merged_html(all_messages, output_dir)
         else:
             return {"error": f"Unsupported format: {fmt}"}
 
@@ -629,18 +580,8 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
             "attachments_failed": failed_files,
         }
 
-    def _export_merged_html(self, messages, output_dir, backup=None):
+    def _export_merged_html(self, messages, output_dir):
         filepath = os.path.join(output_dir, "all_conversations.html")
-
-        attachments_dir = os.path.join(output_dir, "attachments")
-        path_map: dict = {}
-        exported_files = 0
-        failed_files = 0
-        if backup is not None:
-            path_map, exported_files, failed_files = self._export_attachment_files(
-                backup, messages, attachments_dir
-            )
-
         with open(filepath, "w", encoding="utf-8") as f:
             f.write("""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Merged Conversations Export</title>
@@ -652,30 +593,18 @@ body { font-family: -apple-system, sans-serif; max-width: 700px; margin: 0 auto;
 .meta { font-size: 11px; color: #888; clear: both; text-align: center; margin: 12px 0 4px; }
 .sender { font-size: 11px; color: #666; margin-bottom: 2px; }
 .conv-label { font-size: 10px; color: #999; font-style: italic; }
-.att { margin-top: 8px; }
-.att img { max-width: 100%; border-radius: 8px; display: block; }
-.att a { color: inherit; text-decoration: underline; word-break: break-all; }
 </style></head><body>
 <h2>Merged Conversations</h2>
 """)
             for msg in messages:
                 css_class = "sent" if msg["is_from_me"] else "received"
-                body = self._html_message_body(msg, path_map)
-                date = html.escape(msg["date"] or "")
-                conv = html.escape(msg["_conversation"])
+                text = msg["text"] or "[Attachment]"
+                date = msg["date"] or ""
+                conv = msg["_conversation"]
                 direction = "to" if msg["is_from_me"] else "from"
-                f.write(
-                    f'<div class="meta">{date} '
-                    f'<span class="conv-label">({direction} {conv})</span></div>\n'
-                )
+                f.write(f'<div class="meta">{date} <span class="conv-label">({direction} {conv})</span></div>\n')
                 if not msg["is_from_me"]:
-                    f.write(f'<div class="sender">{html.escape(msg["sender"])}</div>\n')
-                f.write(f'<div class="msg {css_class}">{body}</div>\n')
+                    f.write(f'<div class="sender">{msg["sender"]}</div>\n')
+                f.write(f'<div class="msg {css_class}">{text}</div>\n')
             f.write("</body></html>")
-        return {
-            "files": [filepath],
-            "attachments_dir": attachments_dir,
-            "message_count": len(messages),
-            "attachments_exported": exported_files,
-            "attachments_failed": failed_files,
-        }
+        return {"files": [filepath], "message_count": len(messages)}
