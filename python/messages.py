@@ -56,7 +56,7 @@ CSV_COLUMNS = [
     "Sender Handle",
     "Message ID",
     "Message Type",
-    "Is From Owner",
+    "Is From Phone Owner",
     "Is Reaction",
     "Text",
     "Link URL",
