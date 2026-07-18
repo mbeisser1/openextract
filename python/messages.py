@@ -81,14 +81,11 @@ class MessageExtractor:
 
     # ── openextract-only: per-id attachment extraction ───────────────────────
 
-    def get_attachment(self, backup, attachment_id: int) -> dict:
-        """Extract and return an attachment file as base64.
+    def _resolve_attachment_path(self, backup, attachment_id: int) -> dict:
+        """Locate an attachment file in the backup (no conversion / encoding).
 
-        ios-backup-core only embeds attachments in get_messages results; this
-        is the standalone per-attachment fetcher openextract's UI uses.
+        Returns ``{path, filename, mime_type}`` or ``{error: ...}``.
         """
-        # Re-use the inner extractor's connection helper so we share the
-        # same PRAGMAs / index creation it sets up on first use.
         db_path = self._inner._get_sms_db(backup)
         if not db_path:
             return {"error": "sms.db not found"}
@@ -118,12 +115,50 @@ class MessageExtractor:
             if not file_path or not os.path.exists(file_path):
                 return {"error": "Attachment file not found in backup"}
 
-            with open(file_path, "rb") as f:
-                raw_data = f.read()
-
             mime_type = row["mime_type"]
             filename_lower = (row["filename"] or "").lower()
-            if mime_type in ("image/heic", "image/heif") or filename_lower.endswith(".heic") or filename_lower.endswith(".heif"):
+            if not mime_type:
+                _ext_map = {
+                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                    ".png": "image/png", ".gif": "image/gif",
+                    ".heic": "image/heic", ".heif": "image/heif",
+                    ".webp": "image/webp", ".bmp": "image/bmp",
+                }
+                for ext, inferred in _ext_map.items():
+                    if filename_lower.endswith(ext):
+                        mime_type = inferred
+                        break
+
+            return {
+                "path": file_path,
+                "filename": row["transfer_name"] or os.path.basename(row["filename"]),
+                "mime_type": mime_type,
+            }
+        except Exception:
+            raise
+
+    def get_attachment(self, backup, attachment_id: int) -> dict:
+        """Extract and return an attachment file as base64.
+
+        ios-backup-core only embeds attachments in get_messages results; this
+        is the standalone per-attachment fetcher openextract's UI uses.
+        """
+        resolved = self._resolve_attachment_path(backup, attachment_id)
+        if "error" in resolved:
+            return resolved
+
+        try:
+            with open(resolved["path"], "rb") as f:
+                raw_data = f.read()
+
+            mime_type = resolved.get("mime_type")
+            filename_lower = (resolved.get("filename") or "").lower()
+            path_lower = resolved["path"].lower()
+            if (
+                mime_type in ("image/heic", "image/heif")
+                or filename_lower.endswith((".heic", ".heif"))
+                or path_lower.endswith((".heic", ".heif"))
+            ):
                 try:
                     import io
                     import pillow_heif
@@ -137,25 +172,12 @@ class MessageExtractor:
                 except Exception:
                     pass
 
-            # Infer mime_type from extension if still missing (older backups)
-            if not mime_type:
-                _ext_map = {
-                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                    ".png": "image/png", ".gif": "image/gif",
-                    ".heic": "image/heic", ".heif": "image/heif",
-                    ".webp": "image/webp", ".bmp": "image/bmp",
-                }
-                for ext, inferred in _ext_map.items():
-                    if filename_lower.endswith(ext):
-                        mime_type = inferred
-                        break
-
             data = base64.b64encode(raw_data).decode("ascii")
 
             return {
                 "data": data,
                 "mime_type": mime_type,
-                "filename": row["transfer_name"] or os.path.basename(row["filename"]),
+                "filename": resolved["filename"],
             }
         except Exception:
             raise
