@@ -380,7 +380,14 @@ class MessageExtractor:
             writer.writerow(CSV_COLUMNS)
             for msg in messages:
                 writer.writerow(self._csv_row(msg))
-        return {"file": filepath, "message_count": len(messages)}
+        att_path = os.path.join(output_dir, f"conversation_{chat_id}_attachments.csv")
+        att_count = self._export_attachments_csv(messages, att_path)
+        return {
+            "file": filepath,
+            "attachments_file": att_path,
+            "message_count": len(messages),
+            "attachment_count": att_count,
+        }
 
     def _export_html(self, messages, chat_id, output_dir):
         filename = f"conversation_{chat_id}.html"
@@ -430,6 +437,7 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
 
         files = []
         total_count = 0
+        total_attachments = 0
         for chat_id in chat_ids:
             result = self.export_conversation(
                 backup, chat_id, contacts, fmt, output_dir,
@@ -437,8 +445,14 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
             )
             if "error" not in result:
                 files.append(result["file"])
+                if result.get("attachments_file"):
+                    files.append(result["attachments_file"])
                 total_count += result["message_count"]
-        return {"files": files, "message_count": total_count}
+                total_attachments += result.get("attachment_count") or 0
+        out = {"files": files, "message_count": total_count}
+        if fmt == "csv":
+            out["attachment_count"] = total_attachments
+        return out
 
     def _collect_messages_for_chat(self, backup, chat_id, contacts,
                                    date_from=None, date_to=None, query=None):
@@ -514,7 +528,13 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
             writer.writerow(CSV_COLUMNS)
             for msg in messages:
                 writer.writerow(self._csv_row(msg))
-        return {"files": [filepath], "message_count": len(messages)}
+        att_path = os.path.join(output_dir, "all_conversations_attachments.csv")
+        att_count = self._export_attachments_csv(messages, att_path)
+        return {
+            "files": [filepath, att_path],
+            "message_count": len(messages),
+            "attachment_count": att_count,
+        }
 
     def _export_merged_html(self, messages, output_dir):
         filepath = os.path.join(output_dir, "all_conversations.html")
