@@ -371,7 +371,7 @@ def _export_csv(conversations: list, messages_by_conversation: dict,
     with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "Conversation", "Source", "Date", "Sender", "Is From Me",
+            "Conversation", "Source", "Date", "Sender", "Is From Owner",
             "Text", "Deleted Date",
         ])
         for convo in conversations:

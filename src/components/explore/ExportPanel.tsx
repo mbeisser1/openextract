@@ -104,7 +104,7 @@ export default function ExportPanel({ udid }: Props) {
       const header = [
         'Chat Identifier', 'Conversation', 'Conversation Type', 'Service',
         'Date', 'Direction', 'Sender', 'Sender Handle',
-        'Message ID', 'Message Type', 'Is From Me', 'Is Reaction',
+        'Message ID', 'Message Type', 'Is From Owner', 'Is Reaction',
         'Text', 'Link URL', 'Has Attachments', 'Attachments',
       ].map(csvEscape).join(',');
       const csvRows: string[] = [header];
