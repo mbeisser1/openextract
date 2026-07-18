@@ -21,7 +21,10 @@ sidecar imports from this module:
 
 import base64
 import csv
+import html
 import os
+import re
+import shutil
 from typing import Optional
 
 from ios_backup_core.extractors.messages import MessageExtractor as _CoreMessageExtractor
@@ -35,11 +38,24 @@ from ios_backup_core.timestamps import (
 
 __all__ = [
     "MessageExtractor",
+    "ATTACHMENT_CSV_COLUMNS",
     "apple_date_to_iso",
     "iso_to_apple_date",
     "parse_attributed_body",
     "APPLE_EPOCH",
     "NANOSECOND_THRESHOLD",
+]
+
+# Companion attachments CSV (one row per attachment; join on Message ID).
+ATTACHMENT_CSV_COLUMNS = [
+    "Message ID",
+    "Date",
+    "Direction",
+    "Sender",
+    "Filename",
+    "Mime Type",
+    "Attachment ID",
+    "Exported Path",
 ]
 
 
@@ -214,11 +230,111 @@ class MessageExtractor:
         if fmt == "txt":
             return self._export_txt(all_messages, chat_id, output_dir)
         elif fmt == "csv":
-            return self._export_csv(all_messages, chat_id, output_dir)
+            return self._export_csv(all_messages, chat_id, output_dir, backup=backup)
         elif fmt == "html":
             return self._export_html(all_messages, chat_id, output_dir)
         else:
             return {"error": f"Unsupported format: {fmt}"}
+
+    def _csv_direction(self, msg) -> str:
+        return "Sent" if msg.get("is_from_me") else "Received"
+
+    def _attachment_display_name(self, attachment: dict) -> str:
+        name = attachment.get("transfer_name") or ""
+        if name:
+            return name
+        path = attachment.get("filename") or ""
+        return os.path.basename(path) if path else ""
+
+    def _safe_attachment_filename(self, name: str) -> str:
+        """Sanitize a display name for use as a single path segment."""
+        base = os.path.basename(name or "") or "attachment"
+        base = re.sub(r"[^\w.\- ()\[\]]+", "_", base, flags=re.UNICODE)
+        base = base.strip(" .") or "attachment"
+        return base
+
+    def _export_attachment_files(
+        self, backup, messages: list, attachments_dir: str
+    ) -> tuple:
+        """Copy attachment binaries into attachments_dir.
+
+        Returns ``(path_map, exported_count, failed_count)`` where path_map
+        maps attachment_id → relative path like ``attachments/…``.
+        """
+        os.makedirs(attachments_dir, exist_ok=True)
+        folder_name = os.path.basename(os.path.normpath(attachments_dir))
+        path_map: dict = {}
+        exported = 0
+        failed = 0
+
+        for msg in messages:
+            message_id = msg.get("message_id")
+            for att in msg.get("attachments") or []:
+                att_id = att.get("attachment_id")
+                if att_id is None:
+                    failed += 1
+                    continue
+                if att_id in path_map:
+                    continue
+
+                resolved = self._resolve_attachment_path(backup, att_id)
+                if "error" in resolved:
+                    failed += 1
+                    continue
+
+                display = (
+                    self._attachment_display_name(att)
+                    or resolved.get("filename")
+                    or "attachment"
+                )
+                safe = self._safe_attachment_filename(display)
+                mid = "unknown" if message_id is None else message_id
+                dest_name = f"{mid}_{att_id}_{safe}"
+                dest_path = os.path.join(attachments_dir, dest_name)
+                try:
+                    shutil.copy2(resolved["path"], dest_path)
+                except OSError:
+                    failed += 1
+                    continue
+
+                path_map[att_id] = f"{folder_name}/{dest_name}"
+                exported += 1
+
+        return path_map, exported, failed
+
+    def _attachment_csv_rows(self, messages: list, path_map: Optional[dict] = None) -> list:
+        """Build attachment CSV data rows (one per attachment)."""
+        path_map = path_map or {}
+        rows = []
+        for msg in messages:
+            message_id = msg.get("message_id")
+            for att in msg.get("attachments") or []:
+                att_id = att.get("attachment_id")
+                exported = ""
+                if att_id is not None:
+                    exported = path_map.get(att_id) or path_map.get(str(att_id)) or ""
+                rows.append([
+                    "" if message_id is None else message_id,
+                    msg.get("date") or "",
+                    self._csv_direction(msg),
+                    msg.get("sender") or "",
+                    self._attachment_display_name(att),
+                    att.get("mime_type") or "",
+                    "" if att_id is None else att_id,
+                    exported,
+                ])
+        return rows
+
+    def _export_attachments_csv(
+        self, messages: list, filepath: str, path_map: Optional[dict] = None
+    ) -> int:
+        """Write companion attachments CSV; always includes header. Returns row count."""
+        rows = self._attachment_csv_rows(messages, path_map=path_map)
+        with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(ATTACHMENT_CSV_COLUMNS)
+            writer.writerows(rows)
+        return len(rows)
 
     def _attachment_label(self, msg) -> str:
         """Return a clean text label for a message's attachments."""
@@ -260,7 +376,7 @@ class MessageExtractor:
                 f.write(f"[{date}] {sender}: {text}\n")
         return {"file": filepath, "message_count": len(messages)}
 
-    def _export_csv(self, messages, chat_id, output_dir):
+    def _export_csv(self, messages, chat_id, output_dir, backup=None):
         filename = f"conversation_{chat_id}.csv"
         filepath = os.path.join(output_dir, filename)
         with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
@@ -271,7 +387,27 @@ class MessageExtractor:
                     msg["date"], msg["sender"], self._message_text(msg),
                     msg["is_from_me"], msg["has_attachments"]
                 ])
-        return {"file": filepath, "message_count": len(messages)}
+
+        attachments_dir = os.path.join(output_dir, "attachments")
+        path_map: dict = {}
+        exported_files = 0
+        failed_files = 0
+        if backup is not None:
+            path_map, exported_files, failed_files = self._export_attachment_files(
+                backup, messages, attachments_dir
+            )
+
+        att_path = os.path.join(output_dir, f"conversation_{chat_id}_attachments.csv")
+        att_count = self._export_attachments_csv(messages, att_path, path_map=path_map)
+        return {
+            "file": filepath,
+            "attachments_file": att_path,
+            "attachments_dir": attachments_dir,
+            "message_count": len(messages),
+            "attachment_count": att_count,
+            "attachments_exported": exported_files,
+            "attachments_failed": failed_files,
+        }
 
     def _export_html(self, messages, chat_id, output_dir):
         filename = f"conversation_{chat_id}.html"
@@ -321,6 +457,10 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
 
         files = []
         total_count = 0
+        total_attachments = 0
+        total_exported = 0
+        total_failed = 0
+        attachments_dir = None
         for chat_id in chat_ids:
             result = self.export_conversation(
                 backup, chat_id, contacts, fmt, output_dir,
@@ -328,8 +468,21 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
             )
             if "error" not in result:
                 files.append(result["file"])
+                if result.get("attachments_file"):
+                    files.append(result["attachments_file"])
                 total_count += result["message_count"]
-        return {"files": files, "message_count": total_count}
+                total_attachments += result.get("attachment_count") or 0
+                total_exported += result.get("attachments_exported") or 0
+                total_failed += result.get("attachments_failed") or 0
+                attachments_dir = result.get("attachments_dir") or attachments_dir
+        out = {"files": files, "message_count": total_count}
+        if fmt in ("csv", "html"):
+            out["attachment_count"] = total_attachments
+            out["attachments_exported"] = total_exported
+            out["attachments_failed"] = total_failed
+            if attachments_dir:
+                out["attachments_dir"] = attachments_dir
+        return out
 
     def _collect_messages_for_chat(self, backup, chat_id, contacts,
                                    date_from=None, date_to=None, query=None):
@@ -372,7 +525,7 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
         if fmt == "txt":
             return self._export_merged_txt(all_messages, output_dir)
         elif fmt == "csv":
-            return self._export_merged_csv(all_messages, output_dir)
+            return self._export_merged_csv(all_messages, output_dir, backup=backup)
         elif fmt == "html":
             return self._export_merged_html(all_messages, output_dir)
         else:
@@ -390,7 +543,7 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
                 f.write(f"[{date}] ({direction} {conv}) {sender}: {text}\n")
         return {"files": [filepath], "message_count": len(messages)}
 
-    def _export_merged_csv(self, messages, output_dir):
+    def _export_merged_csv(self, messages, output_dir, backup=None):
         filepath = os.path.join(output_dir, "all_conversations.csv")
         with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
@@ -402,7 +555,26 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
                     msg["sender"], self._message_text(msg),
                     msg["is_from_me"], msg["has_attachments"]
                 ])
-        return {"files": [filepath], "message_count": len(messages)}
+
+        attachments_dir = os.path.join(output_dir, "attachments")
+        path_map: dict = {}
+        exported_files = 0
+        failed_files = 0
+        if backup is not None:
+            path_map, exported_files, failed_files = self._export_attachment_files(
+                backup, messages, attachments_dir
+            )
+
+        att_path = os.path.join(output_dir, "all_conversations_attachments.csv")
+        att_count = self._export_attachments_csv(messages, att_path, path_map=path_map)
+        return {
+            "files": [filepath, att_path],
+            "attachments_dir": attachments_dir,
+            "message_count": len(messages),
+            "attachment_count": att_count,
+            "attachments_exported": exported_files,
+            "attachments_failed": failed_files,
+        }
 
     def _export_merged_html(self, messages, output_dir):
         filepath = os.path.join(output_dir, "all_conversations.html")
