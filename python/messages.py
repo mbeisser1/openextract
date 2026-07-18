@@ -190,6 +190,10 @@ class MessageExtractor:
                     break
                 offset += 500
 
+        if fmt == "csv":
+            meta = self._chat_meta_map(backup, contacts)
+            self._stamp_chat_meta(all_messages, chat_id, meta)
+
         if fmt == "txt":
             return self._export_txt(all_messages, chat_id, output_dir)
         elif fmt == "csv":
@@ -390,13 +394,21 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
                        fmt, output_dir, date_from=None, date_to=None, query=None):
         """Merge messages from multiple conversations into one file, sorted by timestamp."""
         all_messages = []
+        chat_meta = self._chat_meta_map(backup, contacts) if fmt == "csv" else {}
         for chat_id in chat_ids:
             msgs = self._collect_messages_for_chat(
                 backup, chat_id, contacts, date_from, date_to, query
             )
             conv_name = conversation_names.get(chat_id, f"Chat {chat_id}")
-            for msg in msgs:
-                msg["_conversation"] = conv_name
+            if fmt == "csv":
+                self._stamp_chat_meta(msgs, chat_id, chat_meta)
+                # Prefer caller-provided display names when present.
+                for msg in msgs:
+                    if conv_name:
+                        msg["_conversation"] = conv_name
+            else:
+                for msg in msgs:
+                    msg["_conversation"] = conv_name
             all_messages.extend(msgs)
 
         all_messages.sort(key=lambda m: m.get("date") or "")
