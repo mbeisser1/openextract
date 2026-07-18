@@ -344,12 +344,9 @@ class MessageExtractor:
         filepath = os.path.join(output_dir, filename)
         with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["Date", "Sender", "Text", "Is From Me", "Has Attachments"])
+            writer.writerow(CSV_COLUMNS)
             for msg in messages:
-                writer.writerow([
-                    msg["date"], msg["sender"], self._message_text(msg),
-                    msg["is_from_me"], msg["has_attachments"]
-                ])
+                writer.writerow(self._csv_row(msg))
         return {"file": filepath, "message_count": len(messages)}
 
     def _export_html(self, messages, chat_id, output_dir):
