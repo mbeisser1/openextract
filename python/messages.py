@@ -133,7 +133,7 @@ class MessageExtractor:
 
         try:
             row = conn.execute(
-                "SELECT filename, mime_type, transfer_name FROM attachment WHERE ROWID = ?",
+                "SELECT filename, mime_type, uti, transfer_name FROM attachment WHERE ROWID = ?",
                 (attachment_id,)
             ).fetchone()
 
@@ -154,14 +154,11 @@ class MessageExtractor:
             if not file_path or not os.path.exists(file_path):
                 return {"error": "Attachment file not found in backup"}
 
-### MJB
-
             with open(file_path, "rb") as f:
                 raw_data = f.read()
 
-            mime_type = row["mime_type"]
-            filename_lower = (row["filename"] or "").lower()
-            if mime_type in ("image/heic", "image/heif") or filename_lower.endswith(".heic") or filename_lower.endswith(".heif"):
+            mime_type = self._resolve_mime_type(row["mime_type"], row["uti"], file_path)
+            if mime_type in ("image/heic", "image/heif"):
                 try:
                     import io
                     import pillow_heif
@@ -174,19 +171,6 @@ class MessageExtractor:
                     mime_type = "image/jpeg"
                 except Exception:
                     pass
-
-            # Infer mime_type from extension if still missing (older backups)
-            if not mime_type:
-                _ext_map = {
-                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                    ".png": "image/png", ".gif": "image/gif",
-                    ".heic": "image/heic", ".heif": "image/heif",
-                    ".webp": "image/webp", ".bmp": "image/bmp",
-                }
-                for ext, inferred in _ext_map.items():
-                    if filename_lower.endswith(ext):
-                        mime_type = inferred
-                        break
 
             data = base64.b64encode(raw_data).decode("ascii")
 
@@ -258,33 +242,31 @@ class MessageExtractor:
         return " ".join(parts)
 
     def _resolve_mime_type(self, mime_type: str, uti: str, file_path: str) -> str:
-        """Determine mime type of an attachment"""
-        
-        # 1. Try the data base
-        if mime_type:
-            return mime_type
-        
-        # 2. If the mime type is null (happens especialy with audio files) then use the uti
-        if uti and uti in _UTI_TO_MIME:
-            return uti
-        
-        # 3. Fall back to magic byte inspection
-        if file_path:
-            try: 
-                magic_mime_type = puremagic.from_file(file_path, True)
-                if magic_mime_type:
-                    return magic_mime_type
-            except:
-                pass
+        """Determine mime type of an attachment.
 
-            # 4. Use the file extension         
-            file_ext = puremagic.ext_from_filename(file_path)
-            if file_ext:                                                  
-                try:
-                    return puremagic.from_extension(file_ext)
-                except:
-                    pass
-            
+        Resolution order:
+        1. Use the mime type from the database when present.
+        2. If mime type is null (common for audio files), map from UTI.
+        3. Fall back to magic-byte inspection of the file.
+        4. Fall back to the filename extension.
+        """
+        if mime_type:
+            return mime_type.lower()
+
+        if uti and uti in _UTI_TO_MIME:
+            return _UTI_TO_MIME[uti].lower()
+
+        if file_path and os.path.isfile(file_path):
+            matches = puremagic.magic_file(file_path)
+            if matches and matches[0].mime_type:
+                return matches[0].mime_type.lower()
+
+            ext = puremagic.ext_from_filename(file_path)
+            if ext:
+                by_ext = puremagic.magic_extension(ext)
+                if by_ext and by_ext[0].mime_type:
+                    return by_ext[0].mime_type.lower()
+
         return "unknown"
 
     def _message_text(self, msg) -> str:
