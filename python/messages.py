@@ -22,6 +22,7 @@ sidecar imports from this module:
 import base64
 import csv
 import os
+import puremagic
 from typing import Optional
 
 from ios_backup_core.extractors.messages import MessageExtractor as _CoreMessageExtractor
@@ -42,6 +43,41 @@ __all__ = [
     "NANOSECOND_THRESHOLD",
 ]
 
+# Apple's universal type identifier to traditional mime types for media attachments.
+# Source: https://gist.github.com/RhetTbull/7221ef3cfd9d746f34b2550d4419a8c2
+_UTI_TO_MIME = {
+    # Images
+    "public.jpeg": "image/jpeg",
+    "public.png": "image/png",
+    "public.heic": "image/heic",
+    "public.heics": "image/heic-sequence",
+    "public.heif": "image/heif",
+    "public.heifs": "image/heif-sequence",
+    "com.compuserve.gif": "image/gif",
+    "public.tiff": "image/tiff",
+    "com.microsoft.bmp": "image/bmp",
+    "public.webp": "image/webp",
+    "com.apple.pict": "image/pict",
+    "public.svg-image": "image/svg+xml",
+
+    # Videos
+    "public.mpeg-4": "video/mp4",
+    "com.apple.quicktime-movie": "video/quicktime",
+    "public.mpeg": "video/mpeg",
+    "public.avi": "video/avi",
+    "public.3gpp": "video/3gpp",
+    "public.3gpp2": "video/3gpp2",
+    "com.apple.m4v-video": "video/x-m4v",
+
+    # Audio
+    "com.apple.m4a-audio": "audio/mp4",        # Apple says audio/x-m4a which is nonstandard?
+    "com.apple.coreaudio-format": "audio/mp4", # Audio messages (.caf)
+    "public.mp3": "audio/mpeg",
+    "org.xiph.flac": "audio/flac",
+    "com.microsoft.waveform-audio": "audio/wav",
+    "public.aac-audio": "audio/aac",
+    "public.aifc-audio": "audio/aiff",
+}
 
 class MessageExtractor:
     """Adapter wrapping the ios-backup-core MessageExtractor.
@@ -117,6 +153,8 @@ class MessageExtractor:
 
             if not file_path or not os.path.exists(file_path):
                 return {"error": "Attachment file not found in backup"}
+
+### MJB
 
             with open(file_path, "rb") as f:
                 raw_data = f.read()
@@ -218,6 +256,36 @@ class MessageExtractor:
             label = f"[{kind}: {name}]" if name else f"[{kind}]"
             parts.append(label)
         return " ".join(parts)
+
+    def _resolve_mime_type(self, mime_type: str, uti: str, file_path: str) -> str:
+        """Determine mime type of an attachment"""
+        
+        # 1. Try the data base
+        if mime_type:
+            return mime_type
+        
+        # 2. If the mime type is null (happens especialy with audio files) then use the uti
+        if uti and uti in _UTI_TO_MIME:
+            return uti
+        
+        # 3. Fall back to magic byte inspection
+        if file_path:
+            try: 
+                magic_mime_type = puremagic.from_file(file_path, True)
+                if magic_mime_type:
+                    return magic_mime_type
+            except:
+                pass
+
+            # 4. Use the file extension         
+            file_ext = puremagic.ext_from_filename(file_path)
+            if file_ext:                                                  
+                try:
+                    return puremagic.from_extension(file_ext)
+                except:
+                    pass
+            
+        return "unknown"
 
     def _message_text(self, msg) -> str:
         """Return the display text for a message, replacing binary attachment data with labels."""
