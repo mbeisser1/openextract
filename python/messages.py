@@ -267,7 +267,7 @@ class MessageExtractor:
                 if by_ext and by_ext[0].mime_type:
                     return by_ext[0].mime_type.lower()
 
-        return "unknown"
+        return "application/octet-stream"
 
     def _message_text(self, msg) -> str:
         """Return the display text for a message, replacing binary attachment data with labels."""
