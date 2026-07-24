@@ -220,12 +220,22 @@ class MessageExtractor:
         return " ".join(parts)
 
     def _message_text(self, msg) -> str:
-        """Return the display text for a message, replacing binary attachment data with labels."""
+        """Return display text for export: body, attachment labels, or type-aware fallback."""
+        text = (msg.get("text") or "").strip()
         if msg.get("has_attachments"):
             label = self._attachment_label(msg)
-            text = (msg.get("text") or "").strip()
             return f"{text} {label}".strip() if text else label
-        return msg.get("text") or ""
+        if text:
+            return text
+        msg_type = msg.get("message_type") or "text"
+        if msg_type == "link":
+            preview = msg.get("link_preview") or {}
+            return preview.get("title") or preview.get("url") or "[Link]"
+        if msg_type == "attachment":
+            return self._attachment_label(msg)
+        if msg_type not in ("text", "system"):
+            return f"[{msg_type}]"
+        return ""
 
     def _export_txt(self, messages, chat_id, output_dir):
         filename = f"conversation_{chat_id}.txt"
@@ -268,7 +278,7 @@ body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto;
 """)
             for msg in messages:
                 css_class = "sent" if msg["is_from_me"] else "received"
-                text = msg["text"] or "[Attachment]"
+                text = self._message_text(msg) or "[No content]"
                 date = msg["date"] or ""
                 f.write(f'<div class="meta">{date}</div>\n')
                 if not msg["is_from_me"]:
@@ -400,7 +410,7 @@ body { font-family: -apple-system, sans-serif; max-width: 700px; margin: 0 auto;
 """)
             for msg in messages:
                 css_class = "sent" if msg["is_from_me"] else "received"
-                text = msg["text"] or "[Attachment]"
+                text = self._message_text(msg) or "[No content]"
                 date = msg["date"] or ""
                 conv = msg["_conversation"]
                 direction = "to" if msg["is_from_me"] else "from"
